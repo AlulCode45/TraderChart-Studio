@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#121722" />
+      <stop offset="100%" stop-color="#08090D" />
+    </linearGradient>
+    <linearGradient id="emeraldGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+    <linearGradient id="skyGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+  </defs>
+
+  <!-- Outer Rounded Container -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bgGrad)" stroke="#1D2532" stroke-width="2.5" />
+
+  <!-- Subtle Grid Lines -->
+  <line x1="24" y1="40" x2="104" y2="40" stroke="#1D2532" stroke-width="1" stroke-dasharray="3 3" />
+  <line x1="24" y1="64" x2="104" y2="64" stroke="#1D2532" stroke-width="1" stroke-dasharray="3 3" />
+  <line x1="24" y1="88" x2="104" y2="88" stroke="#1D2532" stroke-width="1" stroke-dasharray="3 3" />
+
+  <!-- Order Block / FVG Highlight Band -->
+  <rect x="24" y="64" width="80" height="24" rx="4" fill="#10B981" fill-opacity="0.12" stroke="#10B981" stroke-opacity="0.35" stroke-width="1" />
+
+  <!-- Candle 1: Bearish Liquidity Sweep -->
+  <line x1="38" y1="44" x2="38" y2="100" stroke="#EF4444" stroke-width="3" stroke-linecap="round" />
+  <rect x="31" y="54" width="14" height="28" rx="3" fill="#EF4444" />
+
+  <!-- Candle 2: Bullish Displacement -->
+  <line x1="64" y1="30" x2="64" y2="92" stroke="#10B981" stroke-width="3" stroke-linecap="round" />
+  <rect x="57" y="40" width="14" height="38" rx="3" fill="url(#emeraldGrad)" />
+
+  <!-- Candle 3: Expansion / BOS -->
+  <line x1="90" y1="22" x2="90" y2="68" stroke="#38BDF8" stroke-width="3" stroke-linecap="round" />
+  <rect x="83" y="28" width="14" height="28" rx="3" fill="url(#skyGrad)" />
+
+  <!-- BOS Dashed Structure Line -->
+  <line x1="28" y1="38" x2="102" y2="38" stroke="#FACC15" stroke-width="2" stroke-dasharray="4 3" stroke-linecap="round" />
+  <circle cx="90" cy="38" r="3.5" fill="#FACC15" />
+</svg>

@@ -1,10 +1,22 @@
-# TraderChart Studio
+<p align="center">
+  <img src="./public/logo.svg" width="96" height="96" alt="TraderChart Studio Logo" />
+</p>
 
-An open-source visual charting and technical illustration engine built with **React**, **TypeScript**, **Tailwind CSS**, **SVG**, and **TradingView Lightweight Charts v5**.
+<h1 align="center">TraderChart Studio</h1>
 
-Designed specifically for creating clean, publication-grade **trading documentation**, **Smart Money Concepts (SMC) / ICT playbooks**, **price action guides**, and **quantitative strategy docs**.
+<p align="center">
+  An open-source visual charting &amp; SVG diagram engine for trading documentation, SMC/ICT playbooks, and technical analysis guides.
+</p>
+
+<p align="center">
+  <strong>English</strong> •
+  <a href="./README.id.md">Bahasa Indonesia</a> •
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
 
 ---
+
+Built with **React**, **TypeScript**, **Tailwind CSS**, **SVG**, and **TradingView Lightweight Charts v5**.
 
 ## Features
 
@@ -46,11 +58,11 @@ Designed specifically for creating clean, publication-grade **trading documentat
 # Install dependencies
 bun install
 
-# Start the ChartingEngine Studio
+# Start the TraderChart Studio
 bun run dev
 ```
 
-Open `http://localhost:3000` in your browser to launch the **ChartingEngine Studio**.
+Open `http://localhost:3000` in your browser to launch **TraderChart Studio**.
 
 ### Production Build
 
@@ -64,8 +76,10 @@ bun run preview
 ## Project Structure
 
 ```text
+public/
+└── logo.svg                                      # Project vector logo
 src/
-├── App.tsx                                       # Standalone ChartingEngine Studio
+├── App.tsx                                       # Standalone TraderChart Studio
 ├── types/
 │   └── chartBuilderTypes.ts                      # CustomChartConfig & drawing primitive types
 ├── data/
@@ -88,7 +102,7 @@ src/
 
 ## Declarative Usage (`CustomChartRenderer`)
 
-You can embed any chart in your React documentation app by passing a `CustomChartConfig` object:
+Embed any chart in your React documentation app by passing a `CustomChartConfig` object:
 
 ```tsx
 import { CustomChartRenderer } from './components/illustration/CustomChartRenderer';

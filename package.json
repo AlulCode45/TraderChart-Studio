@@ -1,8 +1,12 @@
 {
-  "name": "charting-engine",
+  "name": "traderchart-studio",
   "version": "1.0.0",
-  "description": "Open-source visual charting & illustration engine for trading documentation: Custom SVG Chart Builder, Interactive Lightweight Charts v5, Preset Technical Diagrams, and Snapshot Annotator.",
+  "description": "Open-source visual charting & SVG diagram engine for trading documentation, SMC/ICT playbooks, and technical analysis guides.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AlulCode45/TraderChart-Studio.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",

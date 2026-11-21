@@ -1,4 +1,4 @@
-# ChartingEngine
+# TraderChart Studio
 
 An open-source visual charting and technical illustration engine built with **React**, **TypeScript**, **Tailwind CSS**, **SVG**, and **TradingView Lightweight Charts v5**.
 

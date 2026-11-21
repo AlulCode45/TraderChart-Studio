@@ -1,0 +1,1011 @@
+import React, { useMemo, useState } from 'react';
+import { CustomChartConfig } from '../../types/chartBuilderTypes';
+import { buildSmoothCurvePath } from '../chart-builder/ChartCanvas';
+import { ZoomIn, ZoomOut, RotateCcw, Move } from 'lucide-react';
+
+interface CustomChartRendererProps {
+  config: CustomChartConfig;
+  title?: string;
+  className?: string;
+}
+
+export const CustomChartRenderer: React.FC<CustomChartRendererProps> = ({
+  config,
+  title,
+  className = ''
+}) => {
+  const candles = config.candles || [];
+  const fibonaccis = config.fibonaccis || [];
+  const boxes = config.boxes || [];
+  const positions = config.positions || [];
+  const trendlines = config.trendlines || [];
+  const polylines = config.polylines || [];
+  const arrows = config.arrows || [];
+  const infoCards = config.infoCards || [];
+  const badges = config.badges || [];
+  const legends = config.legends || [];
+
+  const showCandles = config.showCandles !== false;
+  const showVolume = config.showVolume !== false;
+  const showEma = config.showEma !== false;
+  const emaPeriod = config.emaPeriod || 9;
+  const isDarkMode = config.isDarkMode ?? (typeof document !== 'undefined' ? document.documentElement.classList.contains('dark') : true);
+  const candleSpacing = config.candleSpacing || 'normal';
+
+  const [userZoom, setUserZoom] = useState<number>(1);
+  const candleStepBase =
+    candleSpacing === 'compact' ? 52 :
+    candleSpacing === 'wide' ? 98 :
+    candleSpacing === 'ultra-wide' ? 125 :
+    78;
+  const candleStep = Math.round(candleStepBase * userZoom);
+  const candleWidth = Math.max(14, Math.round((
+    candleSpacing === 'compact' ? 16 :
+    candleSpacing === 'wide' ? 26 :
+    candleSpacing === 'ultra-wide' ? 32 :
+    22
+  ) * Math.min(1.4, userZoom)));
+
+  const hasLegend = legends.length > 0;
+  const legendHeight = hasLegend ? 26 : 0;
+  const totalHeight = config.height || (infoCards.length > 0 ? 550 : 490);
+  const volumeHeight = showVolume ? 55 : 0;
+  const padding = { top: 40, right: 90, bottom: 48 + volumeHeight + legendHeight, left: 55 };
+
+  // Calculate the max action index across all price action elements
+  const maxPriceActionIndex = useMemo(() => {
+    let m = Math.max(7, candles.length - 1);
+    positions.forEach(pos => { if (pos.endIndex > m) m = pos.endIndex; });
+    boxes.forEach(b => { if (b.endIndex > m) m = b.endIndex; });
+    trendlines.forEach(tl => {
+      const end = Math.max(tl.x1Index, tl.x2Index);
+      if (end > m) m = end;
+    });
+    polylines.forEach(p => p.points.forEach(pt => { if (pt.index > m) m = pt.index; }));
+    arrows.forEach(arr => {
+      const end = Math.max(arr.startIndex, arr.endIndex);
+      if (end > m) m = end;
+    });
+    badges.forEach(bg => {
+      const estBadgeBars = Math.ceil(((bg.text?.length || 10) * 7.5) / candleStepBase);
+      const reach = (bg.alignX === 'left' ? bg.candleIndex + estBadgeBars : bg.candleIndex + estBadgeBars / 2);
+      if (reach > m) m = reach;
+    });
+    return m;
+  }, [candles.length, positions, boxes, trendlines, polylines, arrows, badges, candleStepBase]);
+
+  const maxBarIndex = useMemo(() => {
+    let maxIdx = maxPriceActionIndex + 1;
+
+    // Allocate safe right-hand stage room for InfoCards
+    if (infoCards.length > 0) {
+      const maxCardWidthPx = Math.max(220, ...infoCards.map(c => c.width || 220));
+      const estCardBars = Math.ceil((maxCardWidthPx + 90) / candleStepBase);
+      const reach = maxIdx + estCardBars + 1;
+      if (reach > maxIdx) maxIdx = reach;
+    }
+
+    return maxIdx;
+  }, [maxPriceActionIndex, infoCards, candleStepBase]);
+
+  const width = Math.max(880, padding.left + maxBarIndex * candleStep + padding.right + 40);
+
+  const { minPrice, maxPrice } = useMemo(() => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const c of candles) {
+      if (c.low < min) min = c.low;
+      if (c.high > max) max = c.high;
+    }
+    for (const p of polylines) {
+      for (const pt of p.points) {
+        if (pt.price < min) min = pt.price;
+        if (pt.price > max) max = pt.price;
+      }
+    }
+    for (const b of boxes) {
+      if (b.bottomPrice < min) min = b.bottomPrice;
+      if (b.topPrice > max) max = b.topPrice;
+    }
+    for (const pos of positions) {
+      if (pos.stopPrice < min) min = pos.stopPrice;
+      if (pos.targetPrice < min) min = pos.targetPrice;
+      if (pos.stopPrice > max) max = pos.stopPrice;
+      if (pos.targetPrice > max) max = pos.targetPrice;
+      if (pos.entryPrice < min) min = pos.entryPrice;
+      if (pos.entryPrice > max) max = pos.entryPrice;
+    }
+    for (const tl of trendlines) {
+      if (tl.y1Price < min) min = tl.y1Price;
+      if (tl.y2Price < min) min = tl.y2Price;
+      if (tl.y1Price > max) max = tl.y1Price;
+      if (tl.y2Price > max) max = tl.y2Price;
+    }
+    for (const bg of badges) {
+      if (bg.price < min) min = bg.price;
+      if (bg.price > max) max = bg.price;
+    }
+    for (const card of infoCards) {
+      if (card.price < min) min = card.price;
+      if (card.price > max) max = card.price;
+    }
+    if (!isFinite(min) || !isFinite(max)) return { minPrice: 60, maxPrice: 180 };
+    const rawRange = Math.max(0.000001, max - min);
+    // Dynamic minimum span based on asset magnitude (e.g., forex decimal pairs vs stocks/crypto)
+    const minSpan = min > 20 ? 20 : (rawRange < 0.001 ? rawRange * 0.5 : rawRange * 0.2);
+    const range = Math.max(minSpan, rawRange);
+    const hasTopCard = infoCards.some(c => c.price >= max);
+    const hasBottomCard = infoCards.some(c => c.price <= min) || badges.some(b => b.price <= min);
+    const topMargin = hasTopCard ? 0.32 : 0.22;
+    const bottomMargin = hasBottomCard ? 0.28 : 0.18;
+    return {
+      minPrice: min - range * bottomMargin,
+      maxPrice: max + range * topMargin
+    };
+  }, [candles, polylines, boxes, positions, trendlines, badges, infoCards]);
+
+  const hasStaggeredLabels = useMemo(() => {
+    return candles.some((c, i) => c.label && (c.label.length > 8 || Boolean(candles[i + 1]?.label)));
+  }, [candles]);
+
+  const maxVolume = useMemo(() => {
+    if (candles.length === 0) return 1000;
+    return Math.max(...candles.map(c => c.volume || 1000), 1000);
+  }, [candles]);
+
+  const priceToY = (price: number): number => {
+    const usableHeight = totalHeight - padding.top - padding.bottom;
+    const ratio = (price - minPrice) / (maxPrice - minPrice || 1);
+    return totalHeight - padding.bottom - ratio * usableHeight;
+  };
+
+  const indexToX = (index: number): number => {
+    return padding.left + index * candleStep + candleStep / 2;
+  };
+
+  const priceGridLevels = useMemo(() => {
+    const count = 5;
+    const step = (maxPrice - minPrice) / count;
+    return Array.from({ length: count + 1 }, (_, i) => minPrice + i * step);
+  }, [minPrice, maxPrice]);
+
+  const emaPoints = useMemo(() => {
+    if (!showEma || candles.length < 2) return [];
+    const k = 2 / (emaPeriod + 1);
+    const points: Array<{ x: number; y: number }> = [];
+    let prevEma = candles[0].close;
+
+    candles.forEach((c, idx) => {
+      const currentEma = c.close * k + prevEma * (1 - k);
+      points.push({ x: indexToX(idx), y: priceToY(currentEma) });
+      prevEma = currentEma;
+    });
+
+    return points;
+  }, [candles, showEma, emaPeriod, minPrice, maxPrice, candleStep]);
+
+  // Guaranteed Stage Isolation & Multi-Card Layout Engine
+  const layoutedInfoCards = useMemo(() => {
+    if (infoCards.length === 0) return [];
+
+    const priceActionEndX = padding.left + (maxPriceActionIndex + 1) * candleStep;
+    const stageStartX = priceActionEndX + 35;
+    let currentStageY = padding.top + 10;
+
+    return infoCards.map((card, idx) => {
+      const rawX = indexToX(card.candleIndex);
+      const rawY = priceToY(card.price);
+      const rawLines = card.lines || [];
+      const hasFooter = Boolean(card.footerBadge);
+
+      // Dynamic text wrap
+      const maxCharPerLine = 34;
+      const wrappedLines: string[] = [];
+      rawLines.forEach(ln => {
+        if (ln.length <= maxCharPerLine) {
+          wrappedLines.push(ln);
+        } else {
+          const words = ln.split(' ');
+          let cur = '';
+          words.forEach(w => {
+            if ((cur + ' ' + w).trim().length <= maxCharPerLine) {
+              cur = (cur + ' ' + w).trim();
+            } else {
+              if (cur) wrappedLines.push(cur);
+              cur = w;
+            }
+          });
+          if (cur) wrappedLines.push(cur);
+        }
+      });
+
+      const longestLineChars = Math.max(
+        (card.title?.length || 10) + (card.stepBadge ? 4 : 0),
+        ...wrappedLines.map(l => l.length)
+      );
+      const computedCardW = Math.max(170, Math.min(260, longestLineChars * 6.8 + 28));
+      const cardW = card.width ? Math.max(card.width, computedCardW) : computedCardW;
+      const cardH = 32 + wrappedLines.length * 14 + (hasFooter ? 24 : 8);
+
+      const isStageCard = card.candleIndex >= candles.length - 1.5 || infoCards.length > 1;
+
+      let x: number;
+      let y: number;
+
+      if (isStageCard) {
+        x = Math.max(stageStartX, card.alignX === 'left' ? rawX : rawX - cardW / 2);
+        if (infoCards.length > 1) {
+          y = currentStageY;
+          currentStageY += cardH + 14;
+        } else {
+          let targetY = rawY;
+          if (card.alignY === 'middle') targetY = rawY - cardH / 2;
+          else if (card.alignY === 'bottom') targetY = rawY - cardH;
+          y = Math.max(padding.top + 8, Math.min(totalHeight - padding.bottom - cardH - 10, targetY));
+        }
+      } else {
+        let targetX = rawX - cardW / 2;
+        if (card.alignX === 'left') targetX = rawX;
+        else if (card.alignX === 'right') targetX = rawX - cardW;
+
+        let targetY = rawY;
+        if (card.alignY === 'bottom') targetY = rawY - cardH;
+        else if (card.alignY === 'middle') targetY = rawY - cardH / 2;
+
+        x = Math.max(padding.left + 5, Math.min(width - padding.right - cardW - 5, targetX));
+        y = Math.max(padding.top + 5, Math.min(totalHeight - padding.bottom - cardH - 10, targetY));
+      }
+
+      return {
+        card,
+        x,
+        y,
+        cardW,
+        cardH,
+        wrappedLines
+      };
+    });
+  }, [infoCards, maxPriceActionIndex, candleStep, padding, candles.length, totalHeight, width, minPrice, maxPrice]);
+
+  const themeBg = isDarkMode ? '#070A12' : '#FFFFFF';
+  const gridStroke = isDarkMode ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.05)';
+  const gridLineStroke = isDarkMode ? 'rgba(148, 163, 184, 0.08)' : 'rgba(100, 116, 139, 0.15)';
+  const labelTextFill = isDarkMode ? '#64748B' : '#475569';
+  const candleBorderStroke = isDarkMode ? '#000000' : '#1E293B';
+
+  const getDashArray = (style?: 'solid' | 'dashed' | 'dotted' | 'none') => {
+    if (style === 'dashed') return '6 4';
+    if (style === 'dotted') return '2 3';
+    return 'none';
+  };
+
+  return (
+    <div className={`border-2 rounded-xl p-4 my-5 overflow-x-auto ${
+      isDarkMode
+        ? 'bg-[#070A12] border-black dark:border-[#1E293B] shadow-[4px_4px_0px_#000]'
+        : 'bg-white border-slate-300 shadow-sm'
+    } ${className}`}>
+      {/* Title, Subtitle, & Interactive Zoom Toolbar */}
+      <div className={`flex flex-wrap items-center justify-between gap-2 w-full mb-3 pb-2 border-b text-xs font-mono ${
+        isDarkMode ? 'border-slate-800' : 'border-slate-200'
+      }`}>
+        <div className="flex items-center space-x-2">
+          {config.title ? (
+            <span className="text-[#10B981] font-bold uppercase tracking-wider flex items-center space-x-1.5">
+              <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
+              <span>{config.title}</span>
+            </span>
+          ) : (
+            <span className="text-slate-400 font-semibold flex items-center space-x-1.5">
+              <Move className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Ilustrasi Visual Interaktif</span>
+            </span>
+          )}
+          {config.subtitle && (
+            <span className={`hidden sm:inline-block px-2 py-0.5 rounded border text-[10px] ${
+              isDarkMode ? 'bg-black/60 border-slate-700 text-slate-300' : 'bg-slate-100 border-slate-200 text-slate-700'
+            }`}>
+              {config.subtitle}
+            </span>
+          )}
+        </div>
+
+        {/* Viewport Zoom & Reset Controls */}
+        <div className="flex items-center space-x-1 ml-auto">
+          <span className="text-[10px] text-slate-400 font-mono mr-1">Zoom: {Math.round(userZoom * 100)}%</span>
+          <button
+            onClick={() => setUserZoom(prev => Math.max(0.75, Number((prev - 0.15).toFixed(2))))}
+            className="p-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors"
+            title="Persempit Spacing (Zoom Out)"
+          >
+            <ZoomOut className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setUserZoom(prev => Math.min(1.85, Number((prev + 0.15).toFixed(2))))}
+            className="p-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors"
+            title="Lebarkan Spacing (Zoom In)"
+          >
+            <ZoomIn className="w-3.5 h-3.5" />
+          </button>
+          {userZoom !== 1 && (
+            <button
+              onClick={() => setUserZoom(1)}
+              className="p-1 rounded bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 transition-colors"
+              title="Reset Spacing"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Horizontal Scroll Hint for Mobile Viewports */}
+      <div className="flex md:hidden items-center justify-between text-[10px] font-mono text-slate-400 mb-2 px-1">
+        <span className="flex items-center space-x-1">
+          <Move className="w-3 h-3 text-emerald-500" />
+          <span>Geser horizontal untuk melihat grafik lengkap</span>
+        </span>
+        <span>Lebar: {width}px</span>
+      </div>
+
+      <div className="w-full overflow-x-auto touch-pan-x scrollbar-thin">
+        <svg
+          viewBox={`0 0 ${width} ${totalHeight}`}
+          style={{ width: `${width}px`, minWidth: `${width}px`, height: `${totalHeight}px` }}
+          className="block select-none"
+        >
+          <defs>
+            <pattern id="viewer-grid-pro" width="28" height="28" patternUnits="userSpaceOnUse">
+              <path d="M 28 0 L 0 0 0 28" fill="none" stroke={gridStroke} strokeWidth="1" />
+            </pattern>
+          </defs>
+
+          <rect width={width} height={totalHeight} fill={themeBg} />
+          <rect width={width} height={totalHeight} fill="url(#viewer-grid-pro)" />
+
+        {/* Horizontal Price Lines & Labels */}
+        {priceGridLevels.map((price) => {
+          const y = priceToY(price);
+          return (
+            <g key={`grid-p-${price}`}>
+              <line
+                x1={padding.left}
+                y1={y}
+                x2={width - padding.right}
+                y2={y}
+                stroke={gridLineStroke}
+                strokeDasharray="4 4"
+              />
+              <text
+                x={width - padding.right + 6}
+                y={y + 4}
+                fill={labelTextFill}
+                fontSize="9"
+                fontFamily="JetBrains Mono, monospace"
+              >
+                {maxPrice < 10 ? price.toFixed(4) : price.toFixed(1)}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Box Drawings */}
+        {boxes.map((b) => {
+          const x1 = indexToX(b.startIndex) - 12;
+          const x2 = indexToX(b.endIndex) + 12;
+          const boxW = Math.max(25, x2 - x1);
+          const yTop = priceToY(b.topPrice);
+          const yBottom = priceToY(b.bottomPrice);
+          const boxHeight = Math.max(3, yBottom - yTop);
+          const yMid = yTop + boxHeight / 2;
+
+          const fillColor = b.color || '#38BDF8';
+          const strokeColor = b.borderColor || fillColor;
+          const textColor = b.textColor || fillColor;
+          const fontSize = b.fontSize || 9.5;
+          const borderStyle = b.borderStyle || 'dashed';
+          const borderW = b.borderWidth ?? 1.2;
+          const midColor = b.midLineColor || strokeColor;
+
+          let labelX = x1 + 6;
+          let labelY = yTop + fontSize + 4;
+          let anchor: 'start' | 'middle' | 'end' = 'start';
+
+          if (b.labelPosition === 'top-right') {
+            labelX = x1 + boxW - 6;
+            anchor = 'end';
+          } else if (b.labelPosition === 'center') {
+            labelX = x1 + boxW / 2;
+            labelY = yMid + fontSize / 3;
+            anchor = 'middle';
+          } else if (b.labelPosition === 'bottom-left') {
+            labelX = x1 + 6;
+            labelY = yTop + boxHeight - 6;
+          }
+
+          return (
+            <g key={b.id}>
+              <rect
+                x={x1}
+                y={yTop}
+                width={boxW}
+                height={boxHeight}
+                fill={fillColor}
+                fillOpacity={b.opacity ?? 0.14}
+                stroke={borderStyle === 'none' ? 'none' : strokeColor}
+                strokeWidth={borderW}
+                strokeDasharray={getDashArray(borderStyle)}
+                rx="4"
+              />
+              {b.showMidLine && (
+                <g>
+                  <line
+                    x1={x1}
+                    y1={yMid}
+                    x2={x1 + boxW}
+                    y2={yMid}
+                    stroke={midColor}
+                    strokeWidth="1"
+                    strokeDasharray="3 2"
+                  />
+                  <text
+                    x={x1 + boxW - 4}
+                    y={yMid - 3}
+                    fill={midColor}
+                    fontSize="8"
+                    fontFamily="JetBrains Mono, monospace"
+                    textAnchor="end"
+                  >
+                    {b.midLineLabel || '50% EQ'}
+                  </text>
+                </g>
+              )}
+              {b.label && (
+                <g>
+                  {/* Pill backplate for box label to guarantee crisp readability */}
+                  <rect
+                    x={anchor === 'start' ? labelX - 2 : anchor === 'end' ? labelX - Math.min(boxW - 12, b.label.length * (fontSize * 0.62) + 8) : labelX - (b.label.length * (fontSize * 0.62) + 8) / 2}
+                    y={labelY - fontSize}
+                    width={Math.min(boxW - 8, b.label.length * (fontSize * 0.62) + 10)}
+                    height={fontSize + 6}
+                    fill={isDarkMode ? '#070A12' : '#FFFFFF'}
+                    fillOpacity={1.0}
+                    stroke={strokeColor}
+                    strokeWidth="0.8"
+                    rx="3"
+                  />
+                  <text
+                    x={labelX}
+                    y={labelY - 1}
+                    fill={textColor}
+                    fontSize={fontSize}
+                    fontWeight="bold"
+                    fontFamily="JetBrains Mono, monospace"
+                    textAnchor={anchor}
+                  >
+                    {b.label}
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Multi-Point Waves & Smooth Curves */}
+        {polylines.map((poly) => {
+          if (poly.points.length < 2) return null;
+          const coords = poly.points.map(pt => ({ x: indexToX(pt.index), y: priceToY(pt.price) }));
+          const lineColor = poly.color || '#38BDF8';
+          const isSmooth = poly.curveType === 'smooth';
+          const pathD = isSmooth
+            ? buildSmoothCurvePath(coords)
+            : `M ${coords.map(c => `${c.x},${c.y}`).join(' L ')}`;
+          const firstPt = coords[0];
+
+          return (
+            <g key={poly.id}>
+              <path
+                d={pathD}
+                fill="none"
+                stroke={lineColor}
+                strokeWidth={poly.strokeWidth || 2.5}
+                strokeDasharray={getDashArray(poly.lineStyle || 'solid')}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {poly.label && (
+                <text
+                  x={firstPt.x + 6}
+                  y={firstPt.y - 8}
+                  fill={poly.textColor || lineColor}
+                  fontSize={poly.fontSize || 10}
+                  fontWeight="bold"
+                  fontFamily="JetBrains Mono, monospace"
+                >
+                  {poly.label}
+                </text>
+              )}
+              {poly.showDots && coords.map((pt, idx) => (
+                <circle key={`${poly.id}-pt-${idx}`} cx={pt.x} cy={pt.y} r="3" fill={lineColor} />
+              ))}
+            </g>
+          );
+        })}
+
+        {/* Position Tool (Long/Short Box) */}
+        {positions.map((pos) => {
+          const x1 = indexToX(pos.startIndex) - 10;
+          const x2 = indexToX(pos.endIndex) + 20;
+          const yEntry = priceToY(pos.entryPrice);
+          const yTarget = priceToY(pos.targetPrice);
+          const yStop = priceToY(pos.stopPrice);
+
+          const isLong = pos.type === 'long';
+          const rewardPips = Math.abs(pos.targetPrice - pos.entryPrice);
+          const riskPips = Math.abs(pos.entryPrice - pos.stopPrice);
+          const rrRatio = riskPips > 0 ? (rewardPips / riskPips).toFixed(2) : '1.00';
+
+          const topY = Math.min(yTarget, yEntry);
+          const targetBoxHeight = Math.abs(yEntry - yTarget);
+          const bottomY = Math.min(yEntry, yStop);
+          const stopBoxHeight = Math.abs(yStop - yEntry);
+
+          const targetColor = pos.targetColor || '#10B981';
+          const stopColor = pos.stopColor || '#EF4444';
+          const badgeBgColor = pos.badgeBgColor || (isDarkMode ? '#020617' : '#FFFFFF');
+          const badgeTextColor = pos.badgeTextColor || '#0284C7';
+
+          return (
+            <g key={pos.id}>
+              <rect
+                x={x1}
+                y={isLong ? topY : yEntry}
+                width={x2 - x1}
+                height={targetBoxHeight}
+                fill={targetColor}
+                fillOpacity={pos.targetOpacity ?? 0.22}
+                stroke={targetColor}
+                strokeWidth="1"
+              />
+              <rect
+                x={x1}
+                y={isLong ? yEntry : bottomY}
+                width={x2 - x1}
+                height={stopBoxHeight}
+                fill={stopColor}
+                fillOpacity={pos.stopOpacity ?? 0.22}
+                stroke={stopColor}
+                strokeWidth="1"
+              />
+              <line x1={x1} y1={yEntry} x2={x2} y2={yEntry} stroke={isDarkMode ? '#F8FAFC' : '#0F172A'} strokeWidth="1.5" />
+              <rect x={x2 - 76} y={yEntry - 8} width="72" height="16" fill={badgeBgColor} stroke={badgeTextColor} strokeWidth="1" rx="3" />
+              <text x={x2 - 40} y={yEntry + 3} fill={badgeTextColor} fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono" textAnchor="middle">
+                R:R 1:{rrRatio}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Fibonacci Retracements */}
+        {fibonaccis.map((fib) => {
+          const xStart = indexToX(fib.startIndex) - 10;
+          const xEnd = indexToX(fib.endIndex) + 35;
+          const levels = [
+            { pct: 0, label: '0.0%', color: '#94A3B8' },
+            { pct: 0.382, label: '38.2%', color: '#38BDF8' },
+            { pct: 0.5, label: '50.0% EQ', color: '#FACC15' },
+            { pct: 0.618, label: '61.8%', color: '#10B981' },
+            { pct: 0.786, label: '78.6% OTE', color: '#A855F7' },
+            { pct: 1.0, label: '100.0%', color: '#94A3B8' }
+          ];
+
+          const y618 = priceToY(fib.startPrice + (fib.endPrice - fib.startPrice) * 0.618);
+          const y786 = priceToY(fib.startPrice + (fib.endPrice - fib.startPrice) * 0.786);
+
+          return (
+            <g key={fib.id}>
+              {fib.showFill !== false && (
+                <rect
+                  x={xStart}
+                  y={Math.min(y618, y786)}
+                  width={xEnd - xStart}
+                  height={Math.abs(y786 - y618)}
+                  fill={fib.fillColor || '#10B981'}
+                  fillOpacity={fib.fillOpacity ?? 0.14}
+                />
+              )}
+              {levels.map((lvl) => {
+                const p = fib.startPrice + (fib.endPrice - fib.startPrice) * lvl.pct;
+                const y = priceToY(p);
+                const strokeCol = fib.lineColor || lvl.color;
+                const txtCol = fib.textColor || lvl.color;
+                return (
+                  <g key={`${fib.id}-lvl-${lvl.pct}`}>
+                    <line
+                      x1={xStart}
+                      y1={y}
+                      x2={xEnd}
+                      y2={y}
+                      stroke={strokeCol}
+                      strokeWidth="1"
+                      strokeDasharray={lvl.pct === 0.5 || lvl.pct === 0.618 ? 'none' : '3 3'}
+                    />
+                    <text
+                      x={xEnd + 4}
+                      y={y + 3}
+                      fill={txtCol}
+                      fontSize="8.5"
+                      fontFamily="JetBrains Mono, monospace"
+                      fontWeight="bold"
+                    >
+                      {lvl.label}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })}
+
+        {/* Dynamic EMA Line */}
+        {showEma && emaPoints.length > 1 && (
+          <path
+            d={`M ${emaPoints.map(p => `${p.x},${p.y}`).join(' L ')}`}
+            fill="none"
+            stroke="#0284C7"
+            strokeWidth="2"
+            strokeOpacity="0.8"
+            strokeLinecap="round"
+          />
+        )}
+
+        {/* Trendlines */}
+        {trendlines.map((t) => {
+          const x1 = indexToX(t.x1Index);
+          const y1 = priceToY(t.y1Price);
+          const x2 = indexToX(t.x2Index);
+          const y2 = priceToY(t.y2Price);
+          const lineColor = t.color || '#FACC15';
+          const fontSize = t.fontSize || 9;
+          const textColor = t.textColor || lineColor;
+          const align = t.labelAlignment || 'center';
+          const labelX = align === 'start' ? x1 + 10 : align === 'end' ? x2 - 10 : (x1 + x2) / 2;
+          const labelY = align === 'start' ? y1 - 8 : align === 'end' ? y2 - 8 : (y1 + y2) / 2 - 8;
+          const pillW = t.label ? Math.max(30, t.label.length * (fontSize * 0.65) + 12) : 0;
+
+          return (
+            <g key={t.id}>
+              <line
+                x1={x1}
+                y1={y1}
+                x2={x2}
+                y2={y2}
+                stroke={lineColor}
+                strokeWidth={t.strokeWidth || 2}
+                strokeDasharray={getDashArray(t.lineStyle || 'solid')}
+                strokeLinecap="round"
+              />
+              {t.showDots !== false && (
+                <>
+                  <circle cx={x1} cy={y1} r="3" fill={lineColor} />
+                  <circle cx={x2} cy={y2} r="3" fill={lineColor} />
+                </>
+              )}
+              {t.label && (
+                <g>
+                  {t.showTextBg !== false && (
+                    <rect
+                      x={labelX - pillW / 2}
+                      y={labelY - fontSize}
+                      width={pillW}
+                      height={fontSize + 6}
+                      fill={t.textBgColor || (isDarkMode ? '#090D16' : '#FFFFFF')}
+                      fillOpacity={1.0}
+                      stroke={lineColor}
+                      strokeWidth="1"
+                      rx="3"
+                    />
+                  )}
+                  <text
+                    x={labelX}
+                    y={labelY}
+                    fill={textColor}
+                    fontSize={fontSize}
+                    fontWeight="bold"
+                    fontFamily="JetBrains Mono, monospace"
+                    textAnchor="middle"
+                  >
+                    {t.label}
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Curved & Straight Arrows */}
+        {arrows.map((arr) => {
+          const x1 = indexToX(arr.startIndex);
+          const y1 = priceToY(arr.startPrice);
+          const x2 = indexToX(arr.endIndex);
+          const y2 = priceToY(arr.endPrice);
+          const col = arr.color || '#FACC15';
+          const midX = (x1 + x2) / 2;
+          const midY = (y1 + y2) / 2 - (arr.curved !== false ? (arr.curveOffset ?? 25) : 0);
+          const pathD = arr.curved !== false
+            ? `M ${x1},${y1} Q ${midX},${midY} ${x2},${y2}`
+            : `M ${x1},${y1} L ${x2},${y2}`;
+          const refX = arr.curved !== false ? midX : x1;
+          const refY = arr.curved !== false ? midY : y1;
+          const angle = Math.atan2(y2 - refY, x2 - refX) * (180 / Math.PI);
+
+          return (
+            <g key={arr.id}>
+              <path d={pathD} fill="none" stroke={col} strokeWidth={arr.strokeWidth || 2.2} strokeDasharray="4 3" />
+              <polygon points="0,0 -8,-4.5 -8,4.5" fill={col} transform={`translate(${x2},${y2}) rotate(${angle})`} />
+              {arr.label && (
+                <text x={midX} y={midY - 6} fill={arr.textColor || col} fontSize="9" fontWeight="bold" fontFamily="JetBrains Mono" textAnchor="middle">
+                  {arr.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Candlesticks */}
+        {showCandles && candles.map((candle, idx) => {
+          const x = indexToX(idx);
+          const isBullish = candle.close >= candle.open;
+          const bodyColor = candle.color || (isBullish ? '#10B981' : '#EF4444');
+          const wickColor = candle.wickColor || bodyColor;
+          const borderColor = candle.borderColor || candleBorderStroke;
+
+          const yHigh = priceToY(candle.high);
+          const yLow = priceToY(candle.low);
+          const yOpen = priceToY(candle.open);
+          const yClose = priceToY(candle.close);
+
+          const bodyTop = Math.min(yOpen, yClose);
+          const bodyHeight = Math.max(3, Math.abs(yClose - yOpen));
+
+          return (
+            <g key={candle.id}>
+              <line x1={x} y1={yHigh} x2={x} y2={bodyTop} stroke={wickColor} strokeWidth="1.8" />
+              <rect
+                x={x - candleWidth / 2}
+                y={bodyTop}
+                width={candleWidth}
+                height={bodyHeight}
+                fill={bodyColor}
+                stroke={borderColor}
+                strokeWidth="1"
+                rx="1.5"
+              />
+              <line x1={x} y1={bodyTop + bodyHeight} x2={x} y2={yLow} stroke={wickColor} strokeWidth="1.8" />
+              {candle.label && (() => {
+                const rawLabel = candle.label.trim();
+                const isOdd = idx % 2 === 1;
+                const baseY = totalHeight - padding.bottom + (hasStaggeredLabels ? (isOdd ? 27 : 13) : 14);
+
+                let line1 = rawLabel;
+                let line2 = '';
+                if (rawLabel.length > 8) {
+                  const parenIdx = rawLabel.indexOf(' (');
+                  const slashIdx = rawLabel.indexOf(' / ');
+                  const dashIdx = rawLabel.indexOf(' - ');
+                  const colonIdx = rawLabel.indexOf(': ');
+
+                  let splitAt = -1;
+                  let sepLen = 1;
+
+                  if (parenIdx !== -1) { splitAt = parenIdx; sepLen = 1; }
+                  else if (colonIdx !== -1) { splitAt = colonIdx + 1; sepLen = 1; }
+                  else if (slashIdx !== -1) { splitAt = slashIdx; sepLen = 3; }
+                  else if (dashIdx !== -1) { splitAt = dashIdx; sepLen = 3; }
+                  else {
+                    const words = rawLabel.split(' ');
+                    if (words.length > 1) {
+                      const mid = Math.ceil(words.length / 2);
+                      line1 = words.slice(0, mid).join(' ');
+                      line2 = words.slice(mid).join(' ');
+                      splitAt = -999;
+                    }
+                  }
+
+                  if (splitAt > 0) {
+                    line1 = rawLabel.substring(0, splitAt).trim();
+                    line2 = rawLabel.substring(splitAt + sepLen).trim();
+                  }
+                }
+
+                return (
+                  <g key={`lbl-${candle.id}`}>
+                    {hasStaggeredLabels && isOdd && (
+                      <line
+                        x1={x}
+                        y1={totalHeight - padding.bottom + 3}
+                        x2={x}
+                        y2={baseY - 10}
+                        stroke={gridLineStroke}
+                        strokeWidth="1"
+                        strokeDasharray="2 2"
+                      />
+                    )}
+                    <text
+                      x={x}
+                      y={baseY}
+                      fill={candle.labelColor || labelTextFill}
+                      fontSize="8"
+                      fontWeight="bold"
+                      fontFamily="JetBrains Mono, monospace"
+                      textAnchor="middle"
+                    >
+                      <tspan x={x} dy="0">{line1}</tspan>
+                      {line2 && <tspan x={x} dy="10.5">{line2}</tspan>}
+                    </text>
+                  </g>
+                );
+              })()}
+            </g>
+          );
+        })}
+
+        {/* Multi-Line Info Cards with Guaranteed Stage Isolation */}
+        {layoutedInfoCards.map(({ card, x, y, cardW, cardH, wrappedLines }) => {
+          const accent = card.color || '#10B981';
+          const bgCol = card.bgColor || accent;
+          const bgOp = card.bgOpacity ?? 0.14;
+          const bodyTextCol = card.textColor || (isDarkMode ? '#E2E8F0' : '#1E293B');
+
+          return (
+            <g key={card.id}>
+              {/* Drop shadow / backplate for anti-clashing */}
+              <rect x={x + 2} y={y + 2} width={cardW} height={cardH} fill="#000000" fillOpacity={isDarkMode ? 0.45 : 0.08} rx="6" />
+              <rect x={x} y={y} width={cardW} height={cardH} fill={isDarkMode ? '#0B1120' : '#FFFFFF'} fillOpacity={0.96} rx="6" />
+              <rect x={x} y={y} width={cardW} height={cardH} fill={bgCol} fillOpacity={bgOp} stroke={accent} strokeWidth="1.5" rx="6" />
+              {card.stepBadge ? (
+                <>
+                  <circle cx={x + 15} cy={y + 15} r="8" fill={accent} />
+                  <text x={x + 15} y={y + 18.5} fill="#000" fontSize="9" fontWeight="900" fontFamily="JetBrains Mono" textAnchor="middle">
+                    {card.stepBadge}
+                  </text>
+                  <text x={x + 28} y={y + 18.5} fill={accent} fontSize="9" fontWeight="900" fontFamily="JetBrains Mono">
+                    {card.title}
+                  </text>
+                </>
+              ) : (
+                <text x={x + 10} y={y + 18.5} fill={accent} fontSize="9.5" fontWeight="900" fontFamily="JetBrains Mono">
+                  {card.title}
+                </text>
+              )}
+              {wrappedLines.map((ln, idx) => (
+                <text key={`${card.id}-l-${idx}`} x={x + 10} y={y + 34 + idx * 13.5} fill={bodyTextCol} fontSize="8.5" fontFamily="JetBrains Mono">
+                  {ln}
+                </text>
+              ))}
+              {card.footerBadge && (
+                <g>
+                  <rect x={x + 10} y={y + cardH - 20} width={cardW - 20} height={15} fill={accent} fillOpacity={0.22} rx="3" />
+                  <text x={x + cardW / 2} y={y + cardH - 10} fill={accent} fontSize="8" fontWeight="bold" fontFamily="JetBrains Mono" textAnchor="middle">
+                    {card.footerBadge}
+                  </text>
+                </g>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Volume Sub-Pane */}
+        {showVolume && (
+          <g transform={`translate(0, ${totalHeight - volumeHeight - legendHeight})`}>
+            <line x1={padding.left} y1={0} x2={width - padding.right} y2={0} stroke={gridLineStroke} strokeWidth="1" />
+            {candles.map((candle, idx) => {
+              const x = indexToX(idx);
+              const vol = candle.volume || 1000;
+              const barH = Math.max(3, (vol / maxVolume) * (volumeHeight - 16));
+              const isBull = candle.close >= candle.open;
+              const barColor = isBull ? 'rgba(16, 185, 129, 0.45)' : 'rgba(239, 68, 68, 0.45)';
+              return (
+                <rect key={`v-${candle.id}`} x={x - candleWidth / 2 + 1} y={volumeHeight - 6 - barH} width={candleWidth - 2} height={barH} fill={barColor} rx="1" />
+              );
+            })}
+          </g>
+        )}
+
+        {/* Badges */}
+        {badges.map((badge) => {
+          const rawX = indexToX(badge.candleIndex);
+          const rawY = priceToY(badge.price);
+          const size = badge.size || 'md';
+          const fontSize = badge.fontSize || (size === 'sm' ? 8 : size === 'lg' ? 10.5 : 9);
+          const padH = size === 'sm' ? 10 : size === 'lg' ? 18 : 14;
+          const padV = size === 'sm' ? 6 : size === 'lg' ? 12 : 8;
+          const bgColor = badge.bgColor || badge.color || '#FACC15';
+          const bgOpacity = badge.style === 'transparent' ? 0 : (badge.bgOpacity ?? (badge.style === 'outline' ? 0.12 : 1));
+          const textColor = badge.textColor || (badge.style === 'outline' || badge.style === 'transparent' ? bgColor : '#000000');
+          const borderColor = badge.borderColor || (badge.style === 'outline' ? bgColor : '#000000');
+          const borderWidth = badge.borderWidth ?? (badge.style === 'transparent' ? 0 : 1);
+          const rx = badge.style === 'pill' ? 12 : 4;
+          const badgeW = Math.max(36, (badge.text?.length || 1) * (fontSize * 0.65) + padH);
+          const badgeH = Math.max(18, fontSize + padV);
+
+          const alignX = badge.alignX || 'center';
+          const alignY = badge.alignY || 'middle';
+
+          let targetX = rawX;
+          if (alignX === 'left') targetX = rawX + badgeW / 2;
+          else if (alignX === 'right') targetX = rawX - badgeW / 2;
+
+          let targetY = rawY;
+          if (alignY === 'top') targetY = rawY + badgeH / 2;
+          else if (alignY === 'bottom') targetY = rawY - badgeH / 2;
+
+          // Keep badge safely inside SVG viewport
+          const x = Math.max(padding.left + badgeW / 2 + 2, Math.min(width - padding.right - badgeW / 2 - 2, targetX));
+          const y = Math.max(padding.top + badgeH / 2 + 2, Math.min(totalHeight - padding.bottom - badgeH / 2 - 4, targetY));
+
+          return (
+            <g key={badge.id}>
+              {/* Solid backplate pill to prevent text bleeding through candle lines */}
+              <rect
+                x={x - badgeW / 2 - 1}
+                y={y - badgeH / 2 - 1}
+                width={badgeW + 2}
+                height={badgeH + 2}
+                fill={isDarkMode ? '#070A12' : '#FFFFFF'}
+                fillOpacity={1.0}
+                rx={rx + 1}
+              />
+              {badge.style === 'callout' && (
+                <polygon
+                  points={`${x - 4},${y + badgeH / 2 - 1} ${x + 4},${y + badgeH / 2 - 1} ${x},${y + badgeH / 2 + 5}`}
+                  fill={bgColor}
+                  fillOpacity={bgOpacity}
+                  stroke={borderColor}
+                  strokeWidth={borderWidth}
+                />
+              )}
+              <rect
+                x={x - badgeW / 2}
+                y={y - badgeH / 2}
+                width={badgeW}
+                height={badgeH}
+                fill={bgColor}
+                fillOpacity={bgOpacity}
+                stroke={borderWidth > 0 ? borderColor : 'none'}
+                strokeWidth={borderWidth}
+                rx={rx}
+              />
+              <text
+                x={x}
+                y={y + fontSize * 0.34}
+                fill={textColor}
+                fontSize={fontSize}
+                fontWeight="900"
+                fontFamily="JetBrains Mono, monospace"
+                textAnchor="middle"
+              >
+                {badge.text}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* Bottom Custom Legend Bar */}
+        {hasLegend && (
+          <g transform={`translate(${padding.left}, ${totalHeight - 8})`}>
+            {legends.map((item, idx) => (
+              <g key={item.id} transform={`translate(${idx * 200}, 0)`}>
+                <circle cx="5" cy="-4" r="4" fill={item.color} />
+                <text x="14" y="0" fill={isDarkMode ? '#94A3B8' : '#475569'} fontSize="9.5" fontWeight="bold" fontFamily="JetBrains Mono">
+                  {item.label}
+                </text>
+              </g>
+            ))}
+          </g>
+        )}
+      </svg>
+      </div>
+    </div>
+  );
+};

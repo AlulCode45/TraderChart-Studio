@@ -1,0 +1,16 @@
+# Dependencies & caches
+node_modules/
+vendor/
+graphify-out/
+.taste-skill/
+dist/
+/data/
+
+# Environment files
+.env
+.env.backup
+.env.production
+
+# Antigravity brain & system
+.DS_Store
+Thumbs.db
